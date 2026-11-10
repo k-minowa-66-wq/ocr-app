@@ -128,7 +128,7 @@
       if (data.success && data.response) {
         document.getElementById('resultText').value = data.response.trim();
       } else {
-        alert("文字起こし失敗:\n" + (data.error || "読み取れませんでした。もう一度撮影してください。"));
+        alert("文字起こし失敗: " + (data.error || "読み取れませんでした。もう一度撮影してください。"));
       }
     } catch (err) {
       alert("エラーが発生しました: " + err.toString());

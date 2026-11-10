@@ -100,7 +100,7 @@
 
 <script>
   // 【共通】添削アプリと同じGASデプロイURLを貼り付けてください
-  const GAS_URL = "https://script.google.com/macros/s/YOUR_GAS_URL_HERE/exec";
+  const GAS_URL = "https://script.google.com/macros/s/AKfycbxgL9nEtD7jYwrIec15df7qmfT-q-CitGI1Ykxzlx-CMfsvBkobDrt8y6mWtLeT5OqS/exec";
 
   document.getElementById('imageInput').addEventListener('change', async (e) => {
     const file = e.target.files && e.target.files[0];

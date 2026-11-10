@@ -85,12 +85,12 @@
     手書き英文の写真を撮影または選択してください。
   </p>
 
-  <label for="imageInput" class="btn-select">
+  <label for="imageInput" class="btn-select" id="lblSelect">
     📂 写真を撮影・選択する
   </label>
   <input type="file" id="imageInput" accept="image/*" style="display:none;">
 
-  <div id="loading" class="loading">⚡ AIが手書き文字を解析中...</div>
+  <div id="loading" class="loading">⚡ AIが手書き文字を解析中... (数秒かかります)</div>
 
   <label style="font-size:12px; font-weight:bold;">文字起こし結果（必要に応じて修正可能）：</label>
   <textarea id="resultText" placeholder="ここに文字起こし結果が表示されます..."></textarea>
@@ -100,17 +100,20 @@
 
 <script>
   // 【共通】添削アプリと同じGASデプロイURLを貼り付けてください
-  const GAS_URL = "https://script.google.com/macros/s/AKfycbxgL9nEtD7jYwrIec15df7qmfT-q-CitGI1Ykxzlx-CMfsvBkobDrt8y6mWtLeT5OqS/exec";
+  const GAS_URL = "https://script.google.com/macros/s/YOUR_GAS_URL_HERE/exec";
 
   document.getElementById('imageInput').addEventListener('change', async (e) => {
     const file = e.target.files && e.target.files[0];
     if (!file) return;
 
     const loading = document.getElementById('loading');
+    const inputEl = document.getElementById('imageInput');
     loading.style.display = 'block';
+    inputEl.disabled = true;
 
     try {
-      const base64Image = await compressImageFile(file, 1280, 0.80);
+      // 画像圧縮を強化 (最大1024px、画質0.70で消費トークンを半減)
+      const base64Image = await compressImageFile(file, 1024, 0.70);
       const ocrPrompt = "Perform OCR on this handwritten English essay image for high school students. Extract ONLY the English text written in the image. Do NOT include any greetings, labels, or notes. Transcribe the text exactly as written.";
 
       const res = await fetch(GAS_URL, {
@@ -128,12 +131,14 @@
       if (data.success && data.response) {
         document.getElementById('resultText').value = data.response.trim();
       } else {
-        alert("文字起こし失敗: " + (data.error || "読み取れませんでした。もう一度撮影してください。"));
+        alert(data.error || "読み取れませんでした。もう一度撮影してください。");
       }
     } catch (err) {
       alert("エラーが発生しました: " + err.toString());
     } finally {
       loading.style.display = 'none';
+      inputEl.disabled = false;
+      inputEl.value = ""; // 選択リセット
     }
   });
 

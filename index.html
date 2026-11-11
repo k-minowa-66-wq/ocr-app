@@ -1,304 +1,175 @@
-function doPost(e) {
-  try {
-    if (!e || !e.postData || !e.postData.contents) {
-      return createJsonResponse({ success: false, error: "送信データ(postData)を受信できませんでした。" });
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>手書き英作文 文字起こしツール (Vision AI版)</title>
+  <link rel="icon" href="data:,">
+  <style>
+    body {
+      font-family: "BIZ UDPGothic", sans-serif;
+      background: #f8fafc;
+      color: #0f172a;
+      padding: 20px;
+      margin: 0;
     }
-    
-    var requestData = JSON.parse(e.postData.contents);
-    var action = requestData.action;
-    
-    if (action === "callGeminiAPI") {
-      var prompt = requestData.prompt;
-      var maxTokens = requestData.maxTokens || 1500;
-      var apiResponse = fetchGeminiWithDynamicFallback(prompt, maxTokens);
-      return createJsonResponse({ success: true, response: apiResponse });
+    .card {
+      background: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 16px;
+      padding: 24px;
+      max-width: 500px;
+      margin: 0 auto;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     }
-    
-    if (action === "callVisionOCR") {
-      var base64ImageData = requestData.base64ImageData;
-      var ocrResultText = processVisionOCRWithFallback(base64ImageData);
-      return createJsonResponse({ success: true, response: ocrResultText });
+    h1 { font-size: 18px; color: #1e3a8a; text-align: center; margin-bottom: 16px; }
+    .btn-select {
+      display: block; width: 100%; padding: 14px; background: #eff6ff;
+      color: #1d4ed8; border: 2px dashed #93c5fd; border-radius: 12px;
+      font-size: 14px; font-weight: bold; text-align: center; cursor: pointer; margin-bottom: 16px;
     }
-    
-    if (action === "saveLearningLog") {
-      saveLogToSpreadsheet(requestData.logData);
-      return createJsonResponse({ success: true, message: "ログの保存に成功しました。" });
+    .btn-select:hover { background: #dbeafe; }
+    textarea {
+      width: 100%; height: 180px; padding: 12px; font-size: 14px;
+      font-family: monospace; border: 1px solid #cbd5e1; border-radius: 8px;
+      margin-bottom: 16px; box-sizing: border-box;
     }
-    
-    if (action === "getLearningHistory") {
-      var logs = getHistoryFromSpreadsheet(requestData.userEmail);
-      return createJsonResponse({ success: true, logs: logs });
+    .btn-send {
+      display: block; width: 100%; padding: 14px; background: #059669;
+      color: #ffffff; border: none; border-radius: 10px; font-size: 15px;
+      font-weight: bold; cursor: pointer; text-align: center;
     }
-    
-    return createJsonResponse({ success: false, error: "未知のアクション: " + action });
-    
-  } catch (err) {
-    return createJsonResponse({ success: false, error: err.toString() });
-  }
-}
+    .btn-send:hover { background: #047857; }
+    .loading {
+      display: none; text-align: center; margin: 16px 0; font-weight: bold; color: #1d4ed8;
+    }
+    .spinner {
+      width: 28px; height: 28px; border: 3px solid #e2e8f0;
+      border-top-color: #1d4ed8; border-radius: 50%;
+      animation: spin 0.8s linear infinite; margin: 0 auto 8px auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
 
-/**
- * 手書き画像文字起こし（動的アクティブモデル参照 ＋ 万全のフォールバック）
- */
-function processVisionOCRWithFallback(base64ImageData) {
-  var props = PropertiesService.getScriptProperties();
-  var geminiKey = props.getProperty("GEMINI_API_KEY") || props.getProperty("GEMINI_API_KEY_1");
-  var groqKey = props.getProperty("GROQ_API_KEY");
+<div class="card">
+  <h1>📷 手書き英作文 高精度文字起こし</h1>
+  <p style="font-size: 12px; color: #64748b; margin-bottom: 16px; text-align: center;">
+    手書き英文の写真を撮影・選択してください。<br>（※AIが手書き英文を高精度に読み取ります）
+  </p>
 
-  if (!geminiKey && !groqKey) {
-    throw new Error("スクリプトプロパティに GEMINI_API_KEY または GROQ_API_KEY が設定されていません。");
-  }
+  <label for="imageInput" class="btn-select" id="lblSelect">📂 写真を撮影・選択する</label>
+  <input type="file" id="imageInput" accept="image/*" style="display:none;">
 
-  var ocrPrompt = "Transcribe the handwritten English essay image exact text as it is. Do NOT correct grammar, spelling, or punctuation. Output ONLY the transcribed English text, nothing else.";
+  <div id="loading" class="loading">
+    <div class="spinner"></div>
+    <div id="statusText">⚡ AIが手書き英文を読み取り中...</div>
+  </div>
 
-  var mimeType = "image/jpeg";
-  var base64Clean = base64ImageData;
-  if (base64ImageData.indexOf(",") !== -1) {
-    var parts = base64ImageData.split(",");
-    var match = parts[0].match(/data:(.*?);base64/);
-    if (match) mimeType = match[1];
-    base64Clean = parts[1];
-  }
+  <label style="font-size:12px; font-weight:bold;">文字起こし結果（必要に応じて修正可能）：</label>
+  <textarea id="resultText" placeholder="ここに文字起こし結果が表示されます..."></textarea>
 
-  var errorDetails = [];
+  <button type="button" id="btnSend" class="btn-send">✅ 添削アプリに送って閉じる</button>
+</div>
 
-  // 1. Gemini Vision（動的取得したアクティブモデルを順次試行）
-  if (geminiKey) {
-    var activeModels = getActiveGeminiModels(geminiKey);
-    for (var i = 0; i < activeModels.length; i++) {
-      try {
-        var currentModel = activeModels[i];
-        var url = "https://generativelanguage.googleapis.com/v1beta/" + currentModel + ":generateContent?key=" + geminiKey;
-        var payload = {
-          contents: [{
-            parts: [
-              { text: ocrPrompt },
-              { inline_data: { mime_type: mimeType, data: base64Clean } }
-            ]
-          }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 1000 }
-        };
-        var res = UrlFetchApp.fetch(url, {
-          method: "post",
-          contentType: "application/json",
-          payload: JSON.stringify(payload),
-          muteHttpExceptions: true
-        });
-        
-        var code = res.getResponseCode();
-        var jsonText = res.getContentText();
-        
-        if (code === 200) {
-          var json = JSON.parse(jsonText);
-          if (json.candidates && json.candidates[0] && json.candidates[0].content && json.candidates[0].content.parts[0]) {
-            return json.candidates[0].content.parts[0].text.trim();
+<script>
+  const DEFAULT_GAS_URL = "https://script.google.com/macros/s/AKfycbyyHIVICe4u8myL1mx5N8ImQ_Ziogk0T5Fe7s9m3DahIC98anQtjaNz327kJpnirG-S/exec";
+
+  function compressImage(file, maxWidth = 800, quality = 0.6) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > maxWidth) {
+              height = Math.round((height * maxWidth) / width);
+              width = maxWidth;
+            }
+          } else {
+            if (height > maxWidth) {
+              width = Math.round((width * maxWidth) / height);
+              height = maxWidth;
+            }
           }
-        } else {
-          errorDetails.push("Gemini(" + currentModel + ") Error " + code + ": " + jsonText.substring(0, 120));
-        }
-      } catch (e) {
-        errorDetails.push("Gemini通信例外: " + e.toString());
-      }
-    }
-  }
 
-  // 2. Groq Vision（現行稼働中のVisionモデルへ切替試行）
-  if (groqKey) {
-    var groqModels = ["llama-3.2-11b-vision-instruct", "llama-3.2-90b-vision-instruct", "meta-llama/llama-4-scout-17b-16e-instruct"];
-    for (var j = 0; j < groqModels.length; j++) {
-      try {
-        var groqUrl = "https://api.groq.com/openai/v1/chat/completions";
-        var groqPayload = {
-          model: groqModels[j],
-          messages: [{
-            role: "user",
-            content: [
-              { type: "text", text: ocrPrompt },
-              { type: "image_url", image_url: { url: "data:" + mimeType + ";base64," + base64Clean } }
-            ]
-          }],
-          temperature: 0.1,
-          max_tokens: 1000
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', quality));
         };
-        var groqRes = UrlFetchApp.fetch(groqUrl, {
-          method: "post",
-          headers: { "Authorization": "Bearer " + groqKey },
-          contentType: "application/json",
-          payload: JSON.stringify(groqPayload),
-          muteHttpExceptions: true
-        });
-
-        var gCode = groqRes.getResponseCode();
-        var gText = groqRes.getContentText();
-
-        if (gCode === 200) {
-          var groqJson = JSON.parse(gText);
-          if (groqJson.choices && groqJson.choices[0] && groqJson.choices[0].message) {
-            return groqJson.choices[0].message.content.trim();
-          }
-        } else {
-          errorDetails.push("Groq(" + groqModels[j] + ") Error " + gCode + ": " + gText.substring(0, 120));
-        }
-      } catch (e) {
-        errorDetails.push("Groq通信例外: " + e.toString());
-      }
-    }
-  }
-
-  throw new Error("⚠️ 利用可能な全AIモデルで文字起こしに失敗しました。\n詳細:\n" + errorDetails.join("\n"));
-}
-
-/**
- * Google AIから現在アクティブなモデル一覧を動的に取得（6時間キャッシュ）
- */
-function getActiveGeminiModels(apiKey) {
-  var cache = CacheService.getScriptCache();
-  var cached = cache.get("ACTIVE_GEMINI_MODELS");
-  if (cached) {
-    try { return JSON.parse(cached); } catch (e) {}
-  }
-
-  try {
-    var listUrl = "https://generativelanguage.googleapis.com/v1beta/models?key=" + apiKey;
-    var res = UrlFetchApp.fetch(listUrl, { method: "get", muteHttpExceptions: true });
-    
-    if (res.getResponseCode() === 200) {
-      var data = JSON.parse(res.getContentText());
-      if (data.models && data.models.length > 0) {
-        var validModels = data.models.filter(function(m) {
-          return m.supportedGenerationMethods && m.supportedGenerationMethods.indexOf("generateContent") !== -1;
-        });
-        
-        validModels.sort(function(a, b) {
-          var aFlash = a.name.indexOf("flash") !== -1 ? 1 : 0;
-          var bFlash = b.name.indexOf("flash") !== -1 ? 1 : 0;
-          if (aFlash !== bFlash) return bFlash - aFlash;
-          return b.name.localeCompare(a.name);
-        });
-
-        var modelNames = validModels.map(function(m) { return m.name; });
-        if (modelNames.length > 0) {
-          cache.put("ACTIVE_GEMINI_MODELS", JSON.stringify(modelNames), 21600);
-          return modelNames;
-        }
-      }
-    }
-  } catch (err) {}
-
-  return ["models/gemini-2.5-flash", "models/gemini-2.0-flash", "models/gemini-1.5-flash"];
-}
-
-function fetchGeminiWithDynamicFallback(promptText, maxTokens) {
-  var props = PropertiesService.getScriptProperties();
-  var apiKeys = [];
-  if (props.getProperty("GEMINI_API_KEY")) apiKeys.push(props.getProperty("GEMINI_API_KEY"));
-  if (props.getProperty("GEMINI_API_KEY_1")) apiKeys.push(props.getProperty("GEMINI_API_KEY_1"));
-  if (props.getProperty("GEMINI_API_KEY_2")) apiKeys.push(props.getProperty("GEMINI_API_KEY_2"));
-  
-  if (apiKeys.length === 0) {
-    throw new Error("GEMINI_API_KEY がスクリプトプロパティに設定されていません。");
-  }
-
-  var payload = {
-    contents: [{ parts: [{ text: promptText }] }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens || 1500 }
-  };
-
-  var lastError = "";
-
-  for (var k = 0; k < apiKeys.length; k++) {
-    var currentKey = apiKeys[k];
-    var candidateModels = getActiveGeminiModels(currentKey);
-
-    for (var m = 0; m < candidateModels.length; m++) {
-      var currentModel = candidateModels[m];
-      var url = "https://generativelanguage.googleapis.com/v1beta/" + currentModel + ":generateContent?key=" + currentKey;
-      var options = {
-        method: "post",
-        contentType: "application/json",
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: true
+        img.onerror = reject;
+        img.src = e.target.result;
       };
-
-      try {
-        var response = UrlFetchApp.fetch(url, options);
-        var responseCode = response.getResponseCode();
-        var json = JSON.parse(response.getContentText());
-
-        if (responseCode === 200 && json.candidates && json.candidates[0] && json.candidates[0].content) {
-          return json.candidates[0].content.parts[0].text;
-        }
-
-        if (responseCode === 429 || (json.error && json.error.message && json.error.message.indexOf("RESOURCE_EXHAUSTED") !== -1)) {
-          lastError = "モデル [" + currentModel + "] の上限到達。";
-          Utilities.sleep(1000);
-          continue;
-        }
-
-        if (json.error) lastError = "API Error (" + responseCode + "): " + json.error.message;
-      } catch (err) {
-        lastError = err.toString();
-      }
-    }
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
   }
 
-  throw new Error("⚠️ AIモデルへのアクセスが集中しています。時間をおいて再送信してください。\n詳細: " + lastError);
-}
+  document.getElementById('imageInput').addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
 
-function saveLogToSpreadsheet(data) {
-  var lock = LockService.getScriptLock();
-  try {
-    lock.waitLock(30000);
-    var spreadsheetId = PropertiesService.getScriptProperties().getProperty("SPREADSHEET_ID");
-    var sheet = spreadsheetId ? SpreadsheetApp.openById(spreadsheetId).getActiveSheet() : SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-
-    if (sheet.getLastRow() === 0) {
-      sheet.appendRow([
-        "日時", "メールアドレス", "学年", "ホーム(組)", "出席番号", "氏名",
-        "トピック", "字数制限", "初版英文", "修正版1", "修正版2(最終)",
-        "初版点数", "改善点数", "合計点数", "対話回答", "最終レポート"
-      ]);
+    if (!DEFAULT_GAS_URL || DEFAULT_GAS_URL.includes("YOUR_GAS_URL_HERE")) {
+      alert("⚠️ ［設定エラー］文字起こしアプリの「DEFAULT_GAS_URL」にご自身のGASデプロイURLが設定されていません。");
+      return;
     }
 
-    var initNum = parseInt((data.initialScore || "").replace(/[^0-9]/g, ""), 10) || 0;
-    var impNum = parseInt((data.improvementScore || "").replace(/[^0-9]/g, ""), 10) || 0;
+    const loading = document.getElementById('loading');
+    const inputEl = document.getElementById('imageInput');
 
-    sheet.appendRow([
-      new Date(), data.userEmail || "", data.userGrade || "", data.userClass || "",
-      data.userNumber || "", data.userName || "", data.topic || "", data.wordLimit || "",
-      data.originalEssay || "", data.revised1 || "", data.revised2 || "",
-      initNum, impNum, initNum + impNum,
-      JSON.stringify(data.interviewAnswers || []), data.finalReportText || ""
-    ]);
-  } finally {
-    lock.releaseLock();
-  }
-}
+    loading.style.display = 'block';
+    inputEl.disabled = true;
 
-function getHistoryFromSpreadsheet(userEmail) {
-  var spreadsheetId = PropertiesService.getScriptProperties().getProperty("SPREADSHEET_ID");
-  var sheet = spreadsheetId ? SpreadsheetApp.openById(spreadsheetId).getActiveSheet() : SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  var rows = sheet.getDataRange().getValues();
-  if (rows.length <= 1) return [];
+    try {
+      const compressedBase64 = await compressImage(file);
 
-  var logs = [];
-  for (var i = rows.length - 1; i >= 1; i--) {
-    var row = rows[i];
-    var emailInRow = row[1] ? row[1].toString().trim() : "";
-    if (!userEmail || emailInRow.toLowerCase() === userEmail.trim().toLowerCase()) {
-      logs.push({
-        timestamp: row[0] ? Utilities.formatDate(new Date(row[0]), "JST", "yyyy/MM/dd HH:mm") : "",
-        userEmail: emailInRow, userGrade: row[2] || "", userClass: row[3] || "",
-        userNumber: row[4] || "", userName: row[5] || "", topic: row[6] || "",
-        wordLimit: row[7] || "", originalEssay: row[8] || "", revised1: row[9] || "",
-        revised2: row[10] || "", initScore: row[11] || 0, impScore: row[12] || 0,
-        totalScore: row[13] || 0, answers: row[14] || "[]", finalReport: row[15] || ""
+      const res = await fetch(DEFAULT_GAS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: 'callVisionOCR', base64ImageData: compressedBase64 })
       });
-    }
-  }
-  return logs;
-}
 
-function createJsonResponse(data) {
-  return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
-}
+      const text = await res.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch(pErr) {
+        throw new Error("非JSON応答: " + text.substring(0, 100));
+      }
+
+      if (data.success && data.response) {
+        document.getElementById('resultText').value = data.response;
+      } else {
+        alert("文字起こし失敗:\n" + (data.error || "認識できませんでした。"));
+      }
+    } catch (err) {
+      alert("通信エラー:\n" + err.toString());
+    } finally {
+      loading.style.display = 'none';
+      inputEl.disabled = false;
+      inputEl.value = "";
+    }
+  });
+
+  document.getElementById('btnSend').addEventListener('click', () => {
+    const text = document.getElementById('resultText').value;
+    if (!text || text.trim() === "") {
+      return alert("文字起こし結果が空です。");
+    }
+
+    if (window.opener) {
+      window.opener.postMessage({ action: 'sendEssayText', text: text }, '*');
+      window.close();
+    } else {
+      navigator.clipboard.writeText(text);
+      alert("クリップボードにコピーしました！添削アプリの初版入力欄に貼り付けてください。");
+    }
+  });
+</script>
+</body>
+</html>

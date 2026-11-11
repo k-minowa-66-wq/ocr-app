@@ -74,10 +74,10 @@
 </div>
 
 <script>
-  // GASのWebアプリURLを貼り付けます
+  // 【重要】ご自身のGASウェブアプリURLに書き換えてください
   const DEFAULT_GAS_URL = "https://script.google.com/macros/s/AKfycbyyHIVICe4u8myL1mx5N8ImQ_Ziogk0T5Fe7s9m3DahIC98anQtjaNz327kJpnirG-S/exec";
 
-  // ブラウザ上での画像自動軽量化（長辺800px / JPEG 60%）
+  // ブラウザ上での画像高速軽量化 (長辺800px / JPEG画質60%)
   function compressImage(file, maxWidth = 800, quality = 0.6) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -118,6 +118,11 @@
     const file = e.target.files && e.target.files[0];
     if (!file) return;
 
+    if (!DEFAULT_GAS_URL || DEFAULT_GAS_URL.includes("YOUR_GAS_URL_HERE")) {
+      alert("⚠️ ［設定エラー］文字起こしアプリの「DEFAULT_GAS_URL」にご自身のGASデプロイURLが設定されていません。");
+      return;
+    }
+
     const loading = document.getElementById('loading');
     const inputEl = document.getElementById('imageInput');
 
@@ -125,24 +130,27 @@
     inputEl.disabled = true;
 
     try {
-      // 1. 画像をブラウザ側で高速圧縮
       const compressedBase64 = await compressImage(file);
 
-      // 2. GASへ送信してAI Vision文字起こしを実行
       const res = await fetch(DEFAULT_GAS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: 'callVisionOCR', base64ImageData: compressedBase64 })
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      let data = {};
+      try { data = JSON.parse(text); } catch(pErr) {
+        throw new Error("非JSON応答: " + text.substring(0, 100));
+      }
+
       if (data.success && data.response) {
         document.getElementById('resultText').value = data.response;
       } else {
-        alert("文字起こし失敗: " + (data.error || "認識できませんでした。"));
+        alert("文字起こし失敗:\n" + (data.error || "認識できませんでした。"));
       }
     } catch (err) {
-      alert("通信エラー: " + err.toString());
+      alert("通信エラー:\n" + err.toString());
     } finally {
       loading.style.display = 'none';
       inputEl.disabled = false;
